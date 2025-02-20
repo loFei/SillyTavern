@@ -1,4 +1,4 @@
-import { saveTtsProviderSettings } from './index.js';
+import { getPreviewString, saveTtsProviderSettings } from './index.js';
 
 export { GptSovitsV2Provider };
 
@@ -10,6 +10,8 @@ class GptSovitsV2Provider {
     settings;
     ready = false;
     voices = [];
+    gpt_weights = [];
+    sovits_weights = [];
     separator = '. ';
     audioElement = document.createElement('audio');
 
@@ -43,7 +45,8 @@ class GptSovitsV2Provider {
         streaming: false,
         text_lang: 'zh',
         prompt_lang: 'zh',
-
+        gpt_weight: "",
+        sovits_weight: "",
     };
 
     get settingsHtml() {
@@ -56,6 +59,12 @@ class GptSovitsV2Provider {
         <input id="text_lang" type="text" class="text_pole" maxlength="250" height="300" value="${this.defaultSettings.text_lang}"/>
         <label for="text_lang">Prompt Lang(Reference audio text language):</label>
         <input id="prompt_lang" type="text" class="text_pole" maxlength="250" height="300" value="${this.defaultSettings.prompt_lang}"/>
+        <label>GPT Weight</label>
+        <select id='gpt_weights_voice'>
+        </select>
+        <label>Sovits Weight</label>
+        <select id='sovits_weights_voice'>
+        </select>
         <br/>
 
         `;
@@ -68,7 +77,8 @@ class GptSovitsV2Provider {
         this.settings.provider_endpoint = $('#tts_endpoint').val();
         this.settings.text_lang = $('#text_lang').val();
         this.settings.prompt_lang = $('#prompt_lang').val();
-
+        this.settings.gpt_weight = $("#gpt_weights_voice").val();
+        this.settings.sovits_weight = $("#sovits_weights_voice").val();
 
         saveTtsProviderSettings();
         this.changeTTSSettings();
@@ -104,7 +114,12 @@ class GptSovitsV2Provider {
 
     // Perform a simple readiness check by trying to fetch voiceIds
     async checkReady() {
-        await Promise.allSettled([this.fetchTtsVoiceObjects(), this.changeTTSSettings()]);
+        await Promise.allSettled([
+            this.fetchTtsVoiceObjects(),
+            this.fetchGPTWeights(),
+            this.fetchSoVITSWeights(),
+            this.changeTTSSettings()
+        ]);
     }
 
     async onRefreshClick() {
@@ -158,6 +173,106 @@ class GptSovitsV2Provider {
         this.voices = responseJson;
 
         return responseJson;
+    }
+
+    async fetchGPTWeights() {
+        let selectElement = $(`#gpt_weights_voice`);
+        selectElement.empty();
+        const response = await fetch(
+            `${this.settings.provider_endpoint}/get_gpt_weights`
+        );
+        console.info(response);
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}: ${await response.json()}`
+            );
+        }
+        const responseJson = await response.json();
+
+        this.gpt_weights = responseJson;
+
+        for (const voiceId of this.gpt_weights) {
+            if (this.settings.gpt_weight.length == 0) {
+                this.settings.gpt_weight = voiceId.name;
+            }
+            const option = document.createElement("option");
+            option.innerText = voiceId.name;
+            option.value = voiceId.name;
+            selectElement.append(option);
+        }
+
+        selectElement.on("change", () => this.reqSetGPTSWeight());
+        selectElement.val(this.settings.gpt_weight);
+
+        return responseJson;
+    }
+
+    async reqSetGPTSWeight() {
+        if (this.settings.gpt_weight == $("#gpt_weights_voice").val()) {
+            return;
+        }
+        this.onSettingsChange();
+        const response = await fetch(
+            `${this.settings.provider_endpoint}/set_gpt_weights?weights_path=GPT_weights_v2/${this.settings.gpt_weight}`
+        );
+        console.info(response);
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}: ${await response.json()}`
+            );
+        }
+    }
+
+    async fetchSoVITSWeights() {
+        let selectElement = $(`#sovits_weights_voice`);
+        selectElement.empty();
+        const response = await fetch(
+            `${this.settings.provider_endpoint}/get_sovits_weights`
+        );
+        console.info(response);
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}: ${await response.json()}`
+            );
+        }
+        const responseJson = await response.json();
+
+        this.sovits_weights = responseJson;
+
+        for (const voiceId of this.sovits_weights) {
+            if (this.settings.sovits_weight.length == 0) {
+                this.settings.sovits_weight = voiceId.name;
+            }
+            const option = document.createElement("option");
+            option.innerText = voiceId.name;
+            option.value = voiceId.name;
+            selectElement.append(option);
+        }
+
+        selectElement.on("change", () => this.reqSetSoVITSWeight());
+        selectElement.val(this.settings.sovits_weight);
+
+        return responseJson;
+    }
+
+    async reqSetSoVITSWeight() {
+        if (this.settings.sovits_weight == $("#sovits_weights_voice").val()) {
+            return;
+        }
+        this.onSettingsChange();
+        const response = await fetch(
+            `${this.settings.provider_endpoint}/set_sovits_weights?weights_path=SoVITS_weights_v2/${this.settings.sovits_weight}`
+        );
+        console.info(response);
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}: ${await response.json()}`
+            );
+        }
     }
 
     // Each time a parameter is changed, we change the configuration
@@ -222,5 +337,22 @@ class GptSovitsV2Provider {
     // Interface not used
     async fetchTtsFromHistory(history_item_id) {
         return Promise.resolve(history_item_id);
+    }
+    
+    async previewTtsVoice(id) {
+        this.audioElement.pause();
+        this.audioElement.currentTime = 0;
+
+        const text = getPreviewString("zh-CN");
+        const response = await this.fetchTtsGeneration(text, id);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const audio = await response.blob();
+        const url = URL.createObjectURL(audio);
+        this.audioElement.src = url;
+        this.audioElement.play();
+        this.audioElement.onended = () => URL.revokeObjectURL(url);
     }
 }
