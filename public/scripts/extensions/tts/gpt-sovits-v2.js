@@ -47,6 +47,13 @@ class GptSovitsV2Provider {
         prompt_lang: 'zh',
         gpt_weight: "",
         sovits_weight: "",
+        batch_size: 1,
+        fragment_interval: 0.3,
+        speed_factor: 1.0,
+        top_k: 5,
+        top_p: 1,
+        temperature: 1,
+        repetition_penalty: 1.35,
     };
 
     get settingsHtml() {
@@ -65,8 +72,98 @@ class GptSovitsV2Provider {
         <label>Sovits Weight</label>
         <select id='sovits_weights_voice'>
         </select>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Batch Size</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_batch_size' type="range" min="1" max="200" step="1" value="${this.defaultSettings.batch_size}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="1" max="200" step="1" data-for="gpt_sovits_v2_batch_size" id="gpt_sovits_v2_batch_size_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Fragment Interval</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_fragment_interval' type="range" min="0.01" max="1" step="0.01" value="${this.defaultSettings.fragment_interval}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="0.01" max="1" step="0.01" data-for="gpt_sovits_v2_fragment_interval" id="gpt_sovits_v2_fragment_interval_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Speed Factor</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_speed_factor' type="range" min="0.6" max="1.65" step="0.05" value="${this.defaultSettings.speed_factor}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="0.6" max="1.65" step="0.05" data-for="gpt_sovits_v2_speed_factor" id="gpt_sovits_v2_speed_factor_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Top K</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_top_k' type="range" min="1" max="100" step="1" value="${this.defaultSettings.top_k}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="1" max="100" step="1" data-for="gpt_sovits_v2_top_k" id="gpt_sovits_v2_top_k_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Top P</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_top_p' type="range" min="0" max="1" step="0.05" value="${this.defaultSettings.top_p}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="0" max="1" step="0.05" data-for="gpt_sovits_v2_top_p" id="gpt_sovits_v2_top_p_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Temperature</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_temperature' type="range" min="0" max="1" step="0.05" value="${this.defaultSettings.temperature}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="0" max="1" step="0.05" data-for="gpt_sovits_v2_temperature" id="gpt_sovits_v2_temperature_counter">
+                </div>
+            </div>
+        </div>
+        <div class="range-block">
+            <div class="range-block-title justifyLeft">
+                <label>Repetition Penalty</label>
+            </div>
+            <div class="range-block-range-and-counter">
+                <div class="range-block-range">
+                    <input id='gpt_sovits_v2_repetition_penalty' type="range" min="0" max="2" step="0.05" value="${this.defaultSettings.repetition_penalty}"/>
+                </div>
+                <div class="range-block-counter">
+                    <input type="number" min="0" max="2" step="0.05" data-for="gpt_sovits_v2_repetition_penalty" id="gpt_sovits_v2_repetition_penalty_counter">
+                </div>
+            </div>
+        </div>
         <br/>
-
         `;
 
         return html;
@@ -79,6 +176,21 @@ class GptSovitsV2Provider {
         this.settings.prompt_lang = $('#prompt_lang').val();
         this.settings.gpt_weight = $("#gpt_weights_voice").val();
         this.settings.sovits_weight = $("#sovits_weights_voice").val();
+        this.settings.batch_size = Number($('#gpt_sovits_v2_batch_size').val());
+        this.settings.fragment_interval = Number($('#gpt_sovits_v2_fragment_interval').val());
+        this.settings.speed_factor = Number($('#gpt_sovits_v2_speed_factor').val());
+        this.settings.top_k = Number($('#gpt_sovits_v2_top_k').val());
+        this.settings.top_p = Number($('#gpt_sovits_v2_top_p').val());
+        this.settings.temperature = Number($('#gpt_sovits_v2_temperature').val());
+        this.settings.repetition_penalty = Number($('#gpt_sovits_v2_repetition_penalty').val());
+
+        $('#gpt_sovits_v2_batch_size_counter').val(this.settings.batch_size);
+        $('#gpt_sovits_v2_fragment_interval_counter').val(this.settings.fragment_interval);
+        $('#gpt_sovits_v2_speed_factor_counter').val(this.settings.speed_factor);
+        $('#gpt_sovits_v2_top_k_counter').val(this.settings.top_k);
+        $('#gpt_sovits_v2_top_p_counter').val(this.settings.top_p);
+        $('#gpt_sovits_v2_temperature_counter').val(this.settings.temperature);
+        $('#gpt_sovits_v2_repetition_penalty_counter').val(this.settings.repetition_penalty);
 
         saveTtsProviderSettings();
         this.changeTTSSettings();
@@ -105,7 +217,27 @@ class GptSovitsV2Provider {
         $('#tts_endpoint').val(this.settings.provider_endpoint);
         $('#text_lang').val(this.settings.text_lang);
         $('#prompt_lang').val(this.settings.prompt_lang);
-
+        $('#gpt_sovits_v2_batch_size').val(this.settings.batch_size);
+        $('#gpt_sovits_v2_batch_size_counter').val(this.settings.batch_size);
+        $('#gpt_sovits_v2_batch_size').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_fragment_interval').val(this.settings.fragment_interval);
+        $('#gpt_sovits_v2_fragment_interval_counter').val(this.settings.fragment_interval);
+        $('#gpt_sovits_v2_fragment_interval').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_speed_factor').val(this.settings.speed_factor);
+        $('#gpt_sovits_v2_speed_factor_counter').val(this.settings.speed_factor);
+        $('#gpt_sovits_v2_speed_factor').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_top_k').val(this.settings.top_k);
+        $('#gpt_sovits_v2_top_k_counter').val(this.settings.top_k);
+        $('#gpt_sovits_v2_top_k').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_top_p').val(this.settings.top_p);
+        $('#gpt_sovits_v2_top_p_counter').val(this.settings.top_p);
+        $('#gpt_sovits_v2_top_p').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_temperature').val(this.settings.temperature);
+        $('#gpt_sovits_v2_temperature_counter').val(this.settings.temperature);
+        $('#gpt_sovits_v2_temperature').on('input', () => this.onSettingsChange());
+        $('#gpt_sovits_v2_repetition_penalty').val(this.settings.repetition_penalty);
+        $('#gpt_sovits_v2_repetition_penalty_counter').val(this.settings.repetition_penalty);
+        $('#gpt_sovits_v2_repetition_penalty').on('input', () => this.onSettingsChange());
 
         await this.checkReady();
 
@@ -193,7 +325,7 @@ class GptSovitsV2Provider {
         this.gpt_weights = responseJson;
 
         for (const voiceId of this.gpt_weights) {
-            if (this.settings.gpt_weight.length == 0) {
+            if (!this.settings.gpt_weight || this.settings.gpt_weight.length == 0) {
                 this.settings.gpt_weight = voiceId.name;
             }
             const option = document.createElement("option");
@@ -243,7 +375,7 @@ class GptSovitsV2Provider {
         this.sovits_weights = responseJson;
 
         for (const voiceId of this.sovits_weights) {
-            if (this.settings.sovits_weight.length == 0) {
+            if (!this.settings.sovits_weight || this.settings.sovits_weight.length == 0) {
                 this.settings.sovits_weight = voiceId.name;
             }
             const option = document.createElement("option");
@@ -305,11 +437,16 @@ class GptSovitsV2Provider {
             text_lang: this.settings.text_lang,
             prompt_lang: this.settings.prompt_lang,
             text_split_method: 'cut5',
-            batch_size: 1,
+            batch_size: this.settings.batch_size,
             media_type: 'ogg',
             streaming_mode: 'true',
+            fragment_interval: this.settings.fragment_interval,
+            speed_factor: this.settings.speed_factor,
+            top_k: this.settings.top_k,
+            top_p: this.settings.top_p,
+            temperature: this.settings.temperature,
+            repetition_penalty: this.settings.repetition_penalty,
         };
-
 
         const url = `${this.settings.provider_endpoint}/`;
 
@@ -336,7 +473,7 @@ class GptSovitsV2Provider {
     async fetchTtsFromHistory(history_item_id) {
         return Promise.resolve(history_item_id);
     }
-    
+
     async previewTtsVoice(id) {
         this.audioElement.pause();
         this.audioElement.currentTime = 0;
