@@ -15,6 +15,7 @@ services:
       - "./data:/home/node/app/data"
       - "./plugins:/home/node/app/plugins"
       - "./extensions:/home/node/app/public/scripts/extensions/third-party"
+      - "./backups:/home/node/app/backups"
     healthcheck:
       test: ["CMD", "node", "src/healthcheck.js"]
       interval: 30s
