@@ -27,6 +27,10 @@ import {
     doNewChat,
     online_status,
     messageFormatting,
+    extension_prompt_types,
+    extension_prompt_roles,
+    deleteMessage,
+    settingsReady,
 } from '../script.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
@@ -41,7 +45,7 @@ import {
     updateBindModelTemplatesState,
 } from './instruct-mode.js';
 
-import { getTagsList, tag_import_setting, tag_map, tags } from './tags.js';
+import { getTagsList, tag_import_setting, tag_map, tag_sort_mode, tags } from './tags.js';
 import { tokenizers } from './tokenizers.js';
 import { BIAS_CACHE } from './logit-bias.js';
 import { renderTemplateAsync } from './templates.js';
@@ -60,6 +64,8 @@ import { fuzzySearchCategories } from './filters.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.js';
 import { bindModelTemplates } from './chat-templates.js';
+import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
+import { t } from './i18n.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -134,7 +140,9 @@ export const power_user = {
     chat_truncation: 100,
     streaming_fps: 30,
     smooth_streaming: false,
+    smooth_streaming_no_think: false,
     smooth_streaming_speed: 50,
+    stream_fade_in: false,
 
     fast_ui_mode: true,
     avatar_style: avatar_styles.ROUND,
@@ -210,6 +218,7 @@ export const power_user = {
     enable_auto_select_input: false,
     enable_md_hotkeys: false,
     tag_import_setting: tag_import_setting.ASK,
+    tag_sort_mode: tag_sort_mode.MANUAL,
     disable_group_trimming: false,
     single_line: false,
 
@@ -227,8 +236,8 @@ export const power_user = {
         first_output_sequence: '',
         last_input_sequence: '',
         last_output_sequence: '',
-        system_sequence_prefix: '',
-        system_sequence_suffix: '',
+        story_string_prefix: '',
+        story_string_suffix: '',
         stop_sequence: '',
         wrap: true,
         macro: true,
@@ -239,6 +248,7 @@ export const power_user = {
         system_same_as_user: false,
         /** @deprecated Use output_suffix instead */
         separator_sequence: '',
+        sequences_as_stop_strings: true,
     },
 
     context: {
@@ -248,6 +258,9 @@ export const power_user = {
         example_separator: defaultExampleSeparator,
         use_stop_strings: true,
         names_as_stop_strings: true,
+        story_string_position: extension_prompt_types.IN_PROMPT,
+        story_string_role: extension_prompt_roles.SYSTEM,
+        story_string_depth: 1,
     },
 
     instruct_derived: false,
@@ -293,6 +306,7 @@ export const power_user = {
     custom_stopping_strings_macro: true,
     fuzzy_search: false,
     encode_tags: false,
+    experimental_macro_engine: false,
     servers: [],
     bogus_folders: false,
     zoomed_avatar_magnification: false,
@@ -312,6 +326,8 @@ export const power_user = {
                 right: AUTOCOMPLETE_WIDTH.CHAT,
             },
             select: AUTOCOMPLETE_SELECT_KEY.TAB + AUTOCOMPLETE_SELECT_KEY.ENTER,
+            /** Whether to show macro autocomplete in all macro-enabled fields (not just expanded editors) */
+            showInAllMacroFields: false,
         },
         parser: {
             /**@type {Object.<PARSER_FLAG,boolean>} */
@@ -329,10 +345,13 @@ export const power_user = {
     external_media_forbidden_overrides: [],
     pin_styles: true,
     click_to_edit: false,
+    media_display: MEDIA_DISPLAY.LIST,
+    image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
 
 let themes = [];
 let movingUIPresets = [];
+/** @type {ContextSettings[]} */
 export let context_presets = [];
 
 const storage_keys = {
@@ -346,6 +365,9 @@ const contextControls = [
     { id: 'context_chat_start', property: 'chat_start', isCheckbox: false, isGlobalSetting: false },
     { id: 'context_use_stop_strings', property: 'use_stop_strings', isCheckbox: true, isGlobalSetting: false, defaultValue: false },
     { id: 'context_names_as_stop_strings', property: 'names_as_stop_strings', isCheckbox: true, isGlobalSetting: false, defaultValue: true },
+    { id: 'context_story_string_position', property: 'story_string_position', isCheckbox: false, isGlobalSetting: false, defaultValue: extension_prompt_types.IN_PROMPT, trigger: true },
+    { id: 'context_story_string_depth', property: 'story_string_depth', isCheckbox: false, isGlobalSetting: false, defaultValue: 1 },
+    { id: 'context_story_string_role', property: 'story_string_role', isCheckbox: false, isGlobalSetting: false, defaultValue: extension_prompt_roles.SYSTEM },
 
     // Existing power user settings
     { id: 'always-force-name2-checkbox', property: 'always_force_name2', isCheckbox: true, isGlobalSetting: true, defaultValue: true },
@@ -358,12 +380,19 @@ const debug_functions = [];
 
 const setHotswapsDebounced = debounce(favsToHotswap);
 
-export function playMessageSound() {
-    if (!power_user.play_message_sound) {
+/**
+ * Plays the message sound if enabled in power user settings.
+ * Passes through the `force` parameter to override settings.
+ * @param {object} [param] Arguments object.
+ * @param {boolean} [param.force] Whether to force play the sound.
+ * @returns {void}
+ */
+export function playMessageSound({ force } = {}) {
+    if (!power_user.play_message_sound && !force) {
         return;
     }
 
-    if (power_user.play_sound_unfocused && browser_has_focus) {
+    if (power_user.play_sound_unfocused && browser_has_focus && !force) {
         return;
     }
 
@@ -1059,7 +1088,8 @@ function applyToastrPosition() {
 
     toastr.options.positionClass = power_user.toastr_position;
     fixToastrForDialogs();
-    $('#toastr_position').val(power_user.toastr_position).prop('selected', true);
+    $('#toastr_position').val(power_user.toastr_position);
+    $(`#toastr_position option[value="${power_user.toastr_position}"]`).prop('selected', true);
 }
 
 function applyChatWidth(type) {
@@ -1164,6 +1194,46 @@ function applyFontScale(type) {
 
     $('#font_scale_counter').val(power_user.font_scale);
     $('#font_scale').val(power_user.font_scale);
+}
+
+/**
+ * Checks if the chat needs to be reloaded to apply media display settings.
+ * @returns {boolean} True if the chat needs reload to apply media display settings
+ */
+function isMediaDisplayReloadNeeded() {
+    // A user is not currently in a chat.
+    const chatId = getCurrentChatId();
+    if (!chatId) {
+        return false;
+    }
+
+    const firstDisplayedIndex = getFirstDisplayedMessageId();
+    const hasUnprocessedMediaMessages = chat.some((message, index) => {
+        // Skip messages that are not currently displayed
+        if (index < firstDisplayedIndex) {
+            return false;
+        }
+        const hasMediaAttachments = Array.isArray(message?.extra?.media) && message.extra.media.length > 0;
+        const lacksMediaDisplay = !message?.extra?.media_display;
+        return hasMediaAttachments && lacksMediaDisplay;
+    });
+
+    return hasUnprocessedMediaMessages;
+}
+
+/**
+ * Shows a toast notification prompting the user to reload the chat if media display settings have changed
+ * and there are messages with media attachments that haven't been processed with the new display format.
+ */
+function showMediaDisplayReloadPrompt() {
+    if (!isMediaDisplayReloadNeeded()) {
+        return;
+    }
+    toastr.info(
+        t`Reload the chat to apply the changes. Click here to reload.`,
+        t`Media Style changed`,
+        { onclick: () => void reloadCurrentChat() },
+    );
 }
 
 function applyTheme(name) {
@@ -1355,14 +1425,25 @@ function applyTheme(name) {
                 $('#click_to_edit').prop('checked', power_user.click_to_edit);
             },
         },
+        {
+            key: 'media_display',
+            action: (oldValue, newValue) => {
+                $('#media_display').val(power_user.media_display);
+                if (oldValue !== newValue) {
+                    showMediaDisplayReloadPrompt();
+                }
+            },
+        },
     ];
 
     for (const { key, selector, type, action } of themeProperties) {
         if (theme[key] !== undefined) {
-            power_user[key] = theme[key];
-            if (selector) $(selector).attr('color', power_user[key]);
+            const oldValue = power_user[key];
+            const newValue = theme[key];
+            power_user[key] = newValue;
+            if (selector) $(selector).attr('color', newValue);
             if (type) applyThemeColor(type);
-            if (action) action();
+            if (action) action(oldValue, newValue);
         } else {
             console.debug(`Empty theme key: ${key}`);
         }
@@ -1490,6 +1571,10 @@ export async function loadPowerUserSettings(settings, data) {
         if (settings.power_user.click_to_edit === undefined && settings.power_user.chat_display === chat_styles.DOCUMENT) {
             settings.power_user.click_to_edit = true;
         }
+        if (Object.hasOwn(settings.power_user, 'auto_sort_tags') && !Object.hasOwn(settings.power_user, 'tag_sort_mode')) {
+            settings.power_user.tag_sort_mode = settings.power_user.auto_sort_tags ? tag_sort_mode.ALPHABETICAL : tag_sort_mode.MANUAL;
+            delete settings.power_user.auto_sort_tags;
+        }
         Object.assign(power_user, settings.power_user);
     }
 
@@ -1513,6 +1598,9 @@ export async function loadPowerUserSettings(settings, data) {
             }
             if (power_user.stscript.autocomplete.select === undefined) {
                 power_user.stscript.autocomplete.select = defaultStscript.autocomplete.select;
+            }
+            if (power_user.stscript.autocomplete.showInAllMacroFields === undefined) {
+                power_user.stscript.autocomplete.showInAllMacroFields = defaultStscript.autocomplete.showInAllMacroFields;
             }
         }
         if (power_user.stscript.parser === undefined) {
@@ -1591,6 +1679,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#persona_allow_multi_connections').prop('checked', power_user.persona_allow_multi_connections);
     $('#persona_auto_lock').prop('checked', power_user.persona_auto_lock);
     $('#encode_tags').prop('checked', power_user.encode_tags);
+    $('#experimental_macro_engine').prop('checked', power_user.experimental_macro_engine);
     $('#example_messages_behavior').val(getExampleMessagesBehavior());
     $(`#example_messages_behavior option[value="${getExampleMessagesBehavior()}"]`).prop('selected', true);
     $('#instruct_derived').parent().find('i').toggleClass('toggleEnabled', !!power_user.instruct_derived);
@@ -1650,6 +1739,7 @@ export async function loadPowerUserSettings(settings, data) {
 
     $('#stscript_autocomplete_state').val(power_user.stscript.autocomplete.state).trigger('input');
     $('#stscript_autocomplete_autoHide').prop('checked', power_user.stscript.autocomplete.autoHide ?? false).trigger('input');
+    $('#stscript_autocomplete_showInAllMacroFields').prop('checked', power_user.stscript.autocomplete.showInAllMacroFields ?? false).trigger('input');
     $('#stscript_matching').val(power_user.stscript.matching ?? 'fuzzy');
     $('#stscript_autocomplete_style').val(power_user.stscript.autocomplete.style ?? 'theme');
     document.body.setAttribute('data-stscript-style', power_user.stscript.autocomplete.style);
@@ -1673,7 +1763,10 @@ export async function loadPowerUserSettings(settings, data) {
     $('#streaming_fps_counter').val(power_user.streaming_fps);
 
     $('#smooth_streaming').prop('checked', power_user.smooth_streaming);
+    $('#smooth_streaming_no_think').prop('checked', power_user.smooth_streaming_no_think);
     $('#smooth_streaming_speed').val(power_user.smooth_streaming_speed);
+
+    $('#stream_fade_in').prop('checked', power_user.stream_fade_in);
 
     $('#font_scale').val(power_user.font_scale);
     $('#font_scale_counter').val(power_user.font_scale);
@@ -1700,6 +1793,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#forbid_external_media').prop('checked', power_user.forbid_external_media);
     $('#pin_styles').prop('checked', power_user.pin_styles);
     $('#click_to_edit').prop('checked', power_user.click_to_edit);
+    $('#media_display').val(power_user.media_display);
+    $('#image_overswipe').val(power_user.image_overswipe);
 
     for (const theme of themes) {
         const option = document.createElement('option');
@@ -1859,6 +1954,47 @@ export function getContextSettings() {
 // TODO: Maybe add a refresh button to reset settings to preset
 // TODO: Add "global state" if a preset doesn't set the power_user checkboxes
 async function loadContextSettings() {
+    /**
+     * Auto-fix missing fields in the story string
+     * @param {ContextSettings} contextSettings Context settings instance
+     */
+    function autoFixStoryString(contextSettings) {
+        // Already migrated, no need to fix
+        if (!contextSettings || Object.hasOwn(contextSettings, 'story_string_position')) {
+            return;
+        }
+
+        let storyString = contextSettings.story_string || '';
+
+        /**
+         * @param {string} field Missing field name
+         * @param {'start'|'end'} position Position of auto-fix
+         */
+        function autoFixMissingField(field, position) {
+            if (storyString.includes(`{{${field}}}`)) {
+                return;
+            }
+
+            console.warn(`[Story String Validation] Story String is missing a field: ${field}. Adding it at the ${position}.`);
+            const fieldTemplate = `{{#if ${field}}}{{${field}}}\n{{/if}}`;
+            const firstCurlyPosition = storyString.includes('{{') ? storyString.indexOf('{{') : 0;
+            const lastCurlyPosition = storyString.includes('}}') ? storyString.lastIndexOf('}}') + '}}'.length : storyString.length;
+            const lastTrimPosition = storyString.includes('{{trim}}') ? storyString.lastIndexOf('{{trim}}') : storyString.length;
+            const endPosition = Math.min(lastTrimPosition, lastCurlyPosition);
+            storyString = position === 'start'
+                ? storyString.substring(0, firstCurlyPosition) + fieldTemplate + storyString.substring(firstCurlyPosition)
+                : storyString.substring(0, endPosition) + fieldTemplate + storyString.substring(endPosition);
+        }
+
+        autoFixMissingField('anchorBefore', 'start');
+        autoFixMissingField('anchorAfter', 'end');
+
+        contextSettings.story_string = storyString;
+    }
+
+    // Migrate story string to add missing fields
+    autoFixStoryString(power_user.context);
+
     contextControls.forEach(control => {
         const $element = $(`#${control.id}`);
 
@@ -1880,7 +2016,10 @@ async function loadContextSettings() {
         // If the setting already exists, no need to duplicate it
         // TODO: Maybe check the power_user object for the setting instead of a flag?
         $element.on('input', async function () {
-            const value = control.isCheckbox ? !!$(this).prop('checked') : $(this).val();
+            let value = control.isCheckbox ? !!$(this).prop('checked') : $(this).val();
+            if (typeof control.defaultValue === 'number') {
+                value = Number(value);
+            }
             if (control.isGlobalSetting) {
                 power_user[control.property] = value;
             } else {
@@ -1892,6 +2031,10 @@ async function loadContextSettings() {
             }
             saveSettingsDebounced();
         });
+
+        if (control.trigger) {
+            $element.trigger('input');
+        }
     });
 
     context_presets.forEach((preset) => {
@@ -1910,6 +2053,9 @@ async function loadContextSettings() {
         if (!preset) {
             return;
         }
+
+        // Migrate story string to add missing fields
+        autoFixStoryString(preset);
 
         power_user.context.preset = name;
 
@@ -2094,12 +2240,15 @@ export function fuzzySearchGroups(searchValue, fuzzySearchCaches = null) {
  * @param {object} [options] Additional options.
  * @param {string} [options.customStoryString] Custom story string template.
  * @param {InstructSettings} [options.customInstructSettings] Custom instruct settings.
+ * @param {ContextSettings} [options.customContextSettings] Custom context settings.
  * @returns {string} The rendered story string.
  */
-export function renderStoryString(params, { customStoryString = null, customInstructSettings = null } = {}) {
+export function renderStoryString(params, { customStoryString = null, customInstructSettings = null, customContextSettings = null } = {}) {
     try {
-        const storyString = customStoryString ?? power_user.context.story_string;
         const instructSettings = structuredClone(customInstructSettings ?? power_user.instruct);
+        const contextSettings = structuredClone(customContextSettings ?? power_user.context);
+        const storyString = customStoryString ?? contextSettings.story_string;
+        const storyStringPosition = contextSettings.story_string_position ?? extension_prompt_types.IN_PROMPT;
 
         // Validate and log possible warnings/errors
         validateStoryString(storyString, params);
@@ -2117,8 +2266,8 @@ export function renderStoryString(params, { customStoryString = null, customInst
         output = output.replace(/^\n+/, '');
 
         // add a newline to the end of the story string if it doesn't have one
-        if (output.length > 0 && !output.endsWith('\n')) {
-            if (!instructSettings.enabled || instructSettings.wrap) {
+        if (output.length > 0 && !output.endsWith('\n') && storyStringPosition !== extension_prompt_types.IN_CHAT) {
+            if (!instructSettings.enabled || (instructSettings.wrap && !instructSettings.story_string_suffix)) {
                 output += '\n';
             }
         }
@@ -2438,6 +2587,7 @@ function getThemeObject(name) {
         compact_input_area: power_user.compact_input_area,
         show_swipe_num_all_messages: power_user.show_swipe_num_all_messages,
         click_to_edit: power_user.click_to_edit,
+        media_display: power_user.media_display,
     };
 }
 
@@ -2668,7 +2818,7 @@ async function loadUntilMesId(mesId) {
     while (getFirstDisplayedMessageId() > mesId && getFirstDisplayedMessageId() !== 0) {
         await showMoreMessages();
         await delay(1);
-        target = $('#chat').find(`.mes[mesid=${mesId}]`);
+        target = $('#chat').find(`.mes[mesid="${mesId}"]`);
 
         if (target.length) {
             break;
@@ -2699,7 +2849,6 @@ async function doMesCut(_, text) {
 
     for (let i = 0; i < totalMesToCut; i++) {
         cutText += (chat[mesIDToCut]?.mes || '') + '\n';
-        let done = false;
         let mesToCut = $('#chat').find(`.mes[mesid=${mesIDToCut}]`);
 
         if (!mesToCut.length) {
@@ -2711,14 +2860,10 @@ async function doMesCut(_, text) {
         }
 
         setEditedMessageId(mesIDToCut);
-        eventSource.once(event_types.MESSAGE_DELETED, () => {
-            done = true;
-        });
-        mesToCut.find('.mes_edit_delete').trigger('click', { fromSlashCommand: true });
-        while (!done) {
-            await delay(1);
-        }
+        await deleteMessage(mesIDToCut, null, false);
     }
+
+    await saveChatConditional();
 
     return cutText;
 }
@@ -3153,7 +3298,7 @@ jQuery(() => {
         const winHeight = window.innerHeight;
         const originalWidth = winWidth * zoomLevel;
         const originalHeight = winHeight * zoomLevel;
-        console.log(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
+        console.debug(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
         console.debug(`Zoom: ${zoomLevel}, X:${winWidth}, Y:${winHeight}, original: ${originalWidth}x${originalHeight} `);
         return zoomLevel;
     });
@@ -3269,6 +3414,11 @@ jQuery(() => {
 
     $('#context_size_derived').on('change', function () {
         $('#context_size_derived').prop('checked', !!power_user.context_size_derived);
+    });
+
+    $('#context_story_string_position').on('input', function () {
+        const value = Number($(this).val());
+        $('#context_story_string_inject_settings').toggle(value === extension_prompt_types.IN_CHAT);
     });
 
     $('#bind_model_templates').on('input', function () {
@@ -3419,8 +3569,18 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
+    $('#smooth_streaming_no_think').on('input', function () {
+        power_user.smooth_streaming_no_think = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
     $('#smooth_streaming_speed').on('input', function () {
         power_user.smooth_streaming_speed = Number($('#smooth_streaming_speed').val());
+        saveSettingsDebounced();
+    });
+
+    $('#stream_fade_in').on('input', function () {
+        power_user.stream_fade_in = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 
@@ -3866,6 +4026,28 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
+    $('#experimental_macro_engine').on('input', function () {
+        power_user.experimental_macro_engine = !!$(this).prop('checked');
+        saveSettingsDebounced();
+
+        // Check if the app is ready before showing the toast
+        if (!settingsReady) {
+            return;
+        }
+
+        eventSource.once(event_types.SETTINGS_UPDATED, function() {
+            toastr.warning(
+                t`Click here to reload.`,
+                t`Toggling the Experimental Macro Engine requires a reload.`,
+                {
+                    onclick: () => window.location.reload(),
+                    timeOut: 10000,
+                    preventDuplicates: true,
+                },
+            );
+        });
+    });
+
     $('#disable_group_trimming').on('input', function () {
         power_user.disable_group_trimming = !!$(this).prop('checked');
         saveSettingsDebounced();
@@ -3907,6 +4089,11 @@ jQuery(() => {
 
     $('#stscript_autocomplete_autoHide').on('input', function () {
         power_user.stscript.autocomplete.autoHide = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#stscript_autocomplete_showInAllMacroFields').on('input', function () {
+        power_user.stscript.autocomplete.showInAllMacroFields = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 
@@ -4046,6 +4233,19 @@ jQuery(() => {
 
     $('#ui_preset_export_button').on('click', async function () {
         await exportTheme();
+    });
+
+    $('#media_display').on('input', async function () {
+        power_user.media_display = $(this).val().toString();
+        saveSettingsDebounced();
+        if (isMediaDisplayReloadNeeded()) {
+            await reloadCurrentChat();
+        }
+    });
+
+    $('#image_overswipe').on('input', function () {
+        power_user.image_overswipe = $(this).val().toString();
+        saveSettingsDebounced();
     });
 
     $(document).on('click', '#debug_table [data-debug-function]', function () {

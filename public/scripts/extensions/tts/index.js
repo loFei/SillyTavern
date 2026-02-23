@@ -1,10 +1,11 @@
 import { cancelTtsPlay, eventSource, event_types, getCurrentChatId, isStreamingEnabled, name2, saveSettingsDebounced, substituteParams } from '../../../script.js';
 import { ModuleWorkerWrapper, extension_settings, getContext, renderExtensionTemplateAsync } from '../../extensions.js';
-import { delay, escapeRegex, getBase64Async, getStringHash, onlyUnique } from '../../utils.js';
+import { delay, escapeRegex, getBase64Async, getStringHash, onlyUnique, regexFromString } from '../../utils.js';
 import { EdgeTtsProvider } from './edge.js';
 import { ElevenLabsTtsProvider } from './elevenlabs.js';
 import { SileroTtsProvider } from './silerotts.js';
 import { GptSovitsV2Provider } from './gpt-sovits-v2.js';
+import { GptSoVITSAdapterProvider } from './gpt-sovits-adapter.js';
 import { CoquiTtsProvider } from './coqui.js';
 import { SystemTtsProvider } from './system.js';
 import { NovelTtsProvider } from './novel.js';
@@ -32,6 +33,10 @@ import { ChatterboxTtsProvider } from './chatterbox.js';
 import { KokoroTtsProvider } from './kokoro.js';
 import { TtsWebuiProvider } from './tts-webui.js';
 import { PollinationsTtsProvider } from './pollinations.js';
+import { MiniMaxTtsProvider } from './minimax.js';
+import { ElectronHubTtsProvider } from './electronhub.js';
+import { ChutesTtsProvider } from './chutes.js';
+import { VolcengineTtsProvider } from './volcengine.js';
 
 const UPDATE_INTERVAL = 1000;
 const wrapper = new ModuleWorkerWrapper(moduleWorker);
@@ -118,15 +123,19 @@ const ttsProviders = {
     AllTalk: AllTalkTtsProvider,
     Azure: AzureTtsProvider,
     Chatterbox: ChatterboxTtsProvider,
+    Chutes: ChutesTtsProvider,
     Coqui: CoquiTtsProvider,
     'CosyVoice (Unofficial)': CosyVoiceProvider,
     Edge: EdgeTtsProvider,
     ElevenLabs: ElevenLabsTtsProvider,
+    'Electron Hub': ElectronHubTtsProvider,
     'Google Translate': GoogleTranslateTtsProvider,
     'Google Gemini TTS': GoogleNativeTtsProvider,
     GSVI: GSVITtsProvider,
+    'GPT-SoVITS-Adapter': GptSoVITSAdapterProvider,
     'GPT-SoVITS-V2 (Unofficial)': GptSovitsV2Provider,
     Kokoro: KokoroTtsProvider,
+    MiniMax: MiniMaxTtsProvider,
     Novel: NovelTtsProvider,
     OpenAI: OpenAITtsProvider,
     'OpenAI Compatible': OpenAICompatibleTtsProvider,
@@ -138,6 +147,7 @@ const ttsProviders = {
     'TTS WebUI': TtsWebuiProvider,
     VITS: VITSTtsProvider,
     XTTSv2: XTTSTtsProvider,
+    Volcengine: VolcengineTtsProvider,
 };
 let ttsProvider;
 let ttsProviderName;
@@ -235,9 +245,7 @@ function isTtsProcessing() {
 
 /**
  * Splits a message into lines and adds each non-empty line to the TTS job queue.
- * @param {Object} message - The message object to be processed.
- * @param {string} message.mes - The text of the message to be split into lines.
- * @param {string} message.name - The name associated with the message.
+ * @param {ChatMessage} message - The message object to be processed.
  * @returns {void}
  */
 function processAndQueueTtsMessage(message) {
@@ -278,7 +286,7 @@ function debugTtsPlayback() {
         },
     ));
 }
-window['debugTtsPlayback'] = debugTtsPlayback;
+globalThis.debugTtsPlayback = debugTtsPlayback;
 
 //##################//
 //   Audio Control  //
@@ -315,8 +323,8 @@ async function playAudioData(audioJob) {
         const srcUrl = await getBase64Async(audioBlob);
 
         // VRM lip sync
-        if (extension_settings.vrm?.enabled && typeof window['vrmLipSync'] === 'function') {
-            await window['vrmLipSync'](audioBlob, char);
+        if (extension_settings.vrm?.enabled && typeof globalThis.vrmLipSync === 'function') {
+            await globalThis.vrmLipSync(audioBlob, char);
         }
 
         audioElement.src = srcUrl;
@@ -333,7 +341,7 @@ async function playAudioData(audioJob) {
     });
 }
 
-window['tts_preview'] = function (id) {
+globalThis.tts_preview = function (id) {
     const audio = document.getElementById(id);
 
     if (audio instanceof HTMLAudioElement && !$(audio).data('disabled')) {
@@ -465,16 +473,17 @@ function completeTtsJob() {
     currentTtsJob = null;
 }
 
-async function tts(text, voiceId, char) {
+async function tts(text, voiceId, char, voiceMapKey = null) {
     async function processResponse(response) {
         // RVC injection
-        if (typeof window['rvcVoiceConversion'] === 'function' && extension_settings.rvc.enabled)
-            response = await window['rvcVoiceConversion'](response, char, text);
+        if (typeof globalThis.rvcVoiceConversion === 'function' && extension_settings.rvc.enabled)
+            response = await globalThis.rvcVoiceConversion(response, char, text);
 
         await addAudioJob(response, char);
     }
 
-    let response = await ttsProvider.generateTts(text, voiceId);
+    // voiceMapKey can also include segment qualifiers, e.g. '{char} ("Quotes")'
+    let response = await ttsProvider.generateTts(text, voiceId, voiceMapKey);
 
     // If async generator, process every chunk as it comes in
     if (typeof response[Symbol.asyncIterator] === 'function') {
@@ -488,6 +497,69 @@ async function tts(text, voiceId, char) {
     completeTtsJob();
 }
 
+function parseMessageSegments(text) {
+    if (!extension_settings.tts.multi_voice_enabled) {
+        return [{ type: 'other', text: text }];
+    }
+
+    const segments = [];
+    const segmentRegex = /(\*[^*]*?\*)|(".*?")|(\u201C.*?\u201D)|(\u00AB.*?\u00BB)|(\u300C.*?\u300D)|(\u300E.*?\u300F)|(\uFF02.*?\uFF02)/gim;
+    let lastIndex = 0;
+    let match;
+
+    segmentRegex.lastIndex = 0;
+
+    while ((match = segmentRegex.exec(text)) !== null) {
+        // Add other text before this match
+        if (match.index > lastIndex) {
+            const otherText = text.substring(lastIndex, match.index).trim();
+            if (otherText && otherText.length > 0) {
+                segments.push({ type: 'other', text: otherText });
+            }
+        }
+
+        const matchedText = match[0];
+        let segmentType = 'other';
+        let content = '';
+
+        if (match[1]) {
+            // Asterisk content (*action*)
+            segmentType = 'action';
+            content = matchedText.slice(1, -1);
+        } else if (match[2] || match[3] || match[4] || match[5] || match[6] || match[7]) {
+            // Various quote types ("dialogue")
+            segmentType = 'dialogue';
+            content = matchedText.slice(1, -1);
+        }
+
+        // Trim and check for actual content
+        content = content.trim();
+        if (content.length > 0) {
+            segments.push({
+                type: segmentType,
+                text: content,
+            });
+        }
+
+        lastIndex = match.index + matchedText.length;
+    }
+
+    // Add remaining other text after last match
+    if (lastIndex < text.length) {
+        const otherText = text.substring(lastIndex).trim();
+        if (otherText.length > 0) {
+            segments.push({ type: 'other', text: otherText });
+        }
+    }
+
+    // If no segments found and not empty, treat whole text as other text
+    if (segments.length === 0 && text.trim().length > 0) {
+        segments.push({ type: 'other', text: text.trim() });
+    }
+
+    return segments;
+}
+
 async function processTtsQueue() {
     // Called each moduleWorker iteration to pull chat messages from queue
     if (currentTtsJob || ttsJobQueue.length <= 0 || audioPaused) {
@@ -496,6 +568,59 @@ async function processTtsQueue() {
 
     console.debug('New message found, running TTS');
     currentTtsJob = ttsJobQueue.shift();
+
+    // Handle segmented jobs that already have processed text
+    if (currentTtsJob.segmentType && currentTtsJob.segmentText) {
+        const char = currentTtsJob.name;
+        const segmentText = currentTtsJob.segmentText;
+        const segmentType = currentTtsJob.segmentType;
+
+        console.log(`TTS (${segmentType}): ${segmentText}`);
+
+        try {
+            let voiceMapKey = char;
+
+            // If multi-voice is enabled, modify the voice map key based on segment type
+            if (extension_settings.tts.multi_voice_enabled && char !== DEFAULT_VOICE_MARKER) {
+                switch (segmentType) {
+                    case 'dialogue':
+                        voiceMapKey = `${char} ("Quotes")`;
+                        break;
+                    case 'action':
+                        voiceMapKey = `${char} (*Text inside asterisks*)`;
+                        break;
+                    case 'other':
+                    default:
+                        voiceMapKey = `${char} (Other text)`;
+                        break;
+                }
+            }
+
+            const voiceMapEntry = voiceMap[voiceMapKey] === DEFAULT_VOICE_MARKER ? voiceMap[DEFAULT_VOICE_MARKER] : voiceMap[voiceMapKey];
+
+            if (!voiceMapEntry || voiceMapEntry === DISABLED_VOICE_MARKER) {
+                throw `${char} not in voicemap. Configure character in extension settings voice map`;
+            }
+
+            const voice = await ttsProvider.getVoice(voiceMapEntry);
+            const voiceId = voice.voice_id;
+            if (voiceId == null) {
+                toastr.error(`Specified voice for ${char} was not found. Check the TTS extension settings.`);
+                throw `Unable to attain voiceId for ${char}`;
+            }
+
+            // Pass the full voiceMapKey (e.g., "User ("Quotes")") as well with character name
+            await tts(segmentText, voiceId, char, voiceMapKey);
+
+        } catch (error) {
+            toastr.error(error.toString());
+            console.error(error);
+            currentTtsJob = null;
+        }
+        return;
+    }
+
+    // Process unsegmented job (first time processing)
     let text = extension_settings.tts.narrate_translated_only ? (currentTtsJob?.extra?.display_text || currentTtsJob.mes) : currentTtsJob.mes;
 
     // Substitute macros
@@ -517,12 +642,19 @@ async function processTtsQueue() {
             : text.replaceAll('*', '').trim(); // remove just the asterisks
     }
 
+    if (extension_settings.tts.apply_regex && extension_settings.tts.regex_pattern) {
+        const regex = regexFromString(extension_settings.tts.regex_pattern);
+        if (regex) {
+            // Clean up extra spaces that might be left after removal
+            text = text.replace(regex, '').replace(/\s+/g, ' ').trim();
+        } else {
+            console.warn('Invalid regex pattern:', extension_settings.tts.regex_pattern);
+        }
+    }
+
     if (extension_settings.tts.narrate_quoted_only) {
-        const special_quotes = /[“”«»「」『』＂＂]/g; // Extend this regex to include other special quotes
-        text = text.replace(special_quotes, '"');
-        const matches = text.match(/".*?"/g); // Matches text inside double quotes, non-greedily
         const partJoiner = (ttsProvider?.separator || ' ... ');
-        text = matches ? matches.join(partJoiner) : text;
+        text = joinQuotedBlocks(text, { separator: partJoiner, includeQuotes: true });
     }
 
     // Remove embedded images
@@ -554,23 +686,112 @@ async function processTtsQueue() {
             return;
         }
 
-        const voiceMapEntry = voiceMap[char] === DEFAULT_VOICE_MARKER ? voiceMap[DEFAULT_VOICE_MARKER] : voiceMap[char];
+        // Parse message into segments if multi-voice is enabled
+        const segments = parseMessageSegments(text);
 
-        if (!voiceMapEntry || voiceMapEntry === DISABLED_VOICE_MARKER) {
-            throw `${char} not in voicemap. Configure character in extension settings voice map`;
+        if (segments.length === 0) {
+            console.warn('No valid segments found in text.');
+            completeTtsJob();
+            return;
         }
-        const voice = await ttsProvider.getVoice(voiceMapEntry);
-        const voiceId = voice.voice_id;
-        if (voiceId == null) {
-            toastr.error(`Specified voice for ${char} was not found. Check the TTS extension settings.`);
-            throw `Unable to attain voiceId for ${char}`;
+
+        // Add all segments to the queue as separate jobs (in reverse order so they process in correct order)
+        for (let i = segments.length - 1; i >= 0; i--) {
+            const segmentJob = {
+                name: char,
+                segmentType: segments[i].type,
+                segmentText: segments[i].text,
+                is_user: currentTtsJob.is_user,
+                mes: currentTtsJob.mes,
+                extra: currentTtsJob.extra,
+            };
+            ttsJobQueue.unshift(segmentJob);
         }
-        await tts(text, voiceId, char);
+
+        // Clear current job so the segmented jobs can be processed
+        currentTtsJob = null;
+
     } catch (error) {
         toastr.error(error.toString());
         console.error(error);
         currentTtsJob = null;
     }
+}
+
+/**
+ * Extract and join quoted blocks with proper matching pairs and nesting.
+ * - Captures outermost quotes and everything inside (including different inner quote styles).
+ * - Requires matching opener/closer style (e.g., “ ... ”, 「 ... 」, « ... », etc.).
+ * - Ignores incomplete/unclosed quotes (doesn't include them in the result).
+ * - Symmetric quotes like "..." and ＂...＂ are supported (not nesting the same symmetric style).
+ *
+ * @param {string} text - The text to process
+ * @param {object} [opts={}] - Optional options object
+ * @param {string} [opts.separator=' ... '] - String to join multiple quoted blocks
+ * @param {boolean} [opts.includeQuotes=true] - Keep the quote chars around the captured text
+ * @param {boolean} [opts.returnEmptyOnNoQuotes=false] - Return an empty string if no quotes are found
+ * @param {Array<[string,string]>} [opts.pairs] - Custom quote pairs; defaults cover EN/DE/FR/JP
+ * @returns {string} The joined quoted blocks, or the original text if no quotes found
+ */
+function joinQuotedBlocks(text, opts = {}) {
+    const {
+        separator = ' ... ',
+        includeQuotes = true,
+        returnEmptyOnNoQuotes = false,
+        pairs = [
+            // typographic doubles
+            ['„', '“'],          // DE low-high
+            ['“', '”'],          // EN
+            ['«', '»'],          // FR open « close »
+            ['»', '«'],          // Some locales open »
+            // typographic singles
+            ['‘', '’'],
+            ['‚', '‘'],
+            // Japanese corner quotes
+            ['「', '」'],
+            ['『', '』'],
+            // symmetric doubles
+            ['"', '"'],
+            ['＂', '＂'],
+        ],
+    } = opts;
+
+    if (!text || typeof text !== 'string') return text;
+
+    const openToClose = Object.fromEntries(pairs);
+
+    const segments = [];
+    const stack = []; // [{ opener, expectedClose, start }]
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        const top = stack[stack.length - 1];
+
+        // Prefer closing the current open pair if the char matches its expected closer
+        if (top && ch === top.expectedClose) {
+            const finished = stack.pop();
+            if (stack.length === 0) {
+                // Only collect outermost quotes (contains all nested content)
+                segments.push(text.slice(finished.start, i + 1));
+            }
+            continue;
+        }
+
+        // Otherwise, see if this is a new opener
+        if (openToClose[ch]) {
+            stack.push({ opener: ch, expectedClose: openToClose[ch], start: i });
+            continue;
+        }
+
+        // If it's a stray closer that doesn't match current top, ignore
+    }
+
+    if (!segments.length) return returnEmptyOnNoQuotes ? '' : text;
+
+    const cleaned = includeQuotes
+        ? segments
+        : segments.map(s => s.slice(1, -1)); // all defined pairs are single-char quotes
+
+    return cleaned.join(separator);
 }
 
 async function playFullConversation() {
@@ -590,7 +811,7 @@ async function playFullConversation() {
     ttsJobQueue = chat;
 }
 
-window['playFullConversation'] = playFullConversation;
+globalThis.playFullConversation = playFullConversation;
 
 //#############################//
 //  Extension UI and Settings  //
@@ -620,6 +841,11 @@ function loadSettings() {
     $('#tts_pass_asterisks').prop('checked', extension_settings.tts.pass_asterisks);
     $('#tts_skip_codeblocks').prop('checked', extension_settings.tts.skip_codeblocks);
     $('#tts_skip_tags').prop('checked', extension_settings.tts.skip_tags);
+    $('#tts_multi_voice_enabled').prop('checked', extension_settings.tts.multi_voice_enabled);
+    $('#tts_apply_regex').prop('checked', extension_settings.tts.apply_regex);
+    $('#tts_regex_pattern').val(extension_settings.tts.regex_pattern);
+    $('#tts_regex_block').toggle(extension_settings.tts.apply_regex);
+    updateRegexPatternWarning();
     $('#playback_rate').val(extension_settings.tts.playback_rate);
     $('#playback_rate_counter').val(Number(extension_settings.tts.playback_rate).toFixed(2));
     $('#playback_rate_block').toggle(extension_settings.tts.currentProvider !== 'System');
@@ -634,6 +860,9 @@ const defaultSettings = {
     auto_generation: true,
     narrate_user: false,
     playback_rate: 1,
+    multi_voice_enabled: false,
+    apply_regex: false,
+    regex_pattern: '',
 };
 
 function setTtsStatus(status, success) {
@@ -725,6 +954,43 @@ function onPassAsterisksClick() {
     extension_settings.tts.pass_asterisks = !!$('#tts_pass_asterisks').prop('checked');
     saveSettingsDebounced();
     console.log('setting pass asterisks', extension_settings.tts.pass_asterisks);
+}
+
+function onMultiVoiceClick() {
+    extension_settings.tts.multi_voice_enabled = !!$('#tts_multi_voice_enabled').prop('checked');
+    saveSettingsDebounced();
+    // Reinitialize voice map to show/hide voices
+    initVoiceMap();
+}
+
+function onApplyRegexChange() {
+    extension_settings.tts.apply_regex = !!$('#tts_apply_regex').prop('checked');
+    saveSettingsDebounced();
+    $('#tts_regex_block').toggle(extension_settings.tts.apply_regex);
+    updateRegexPatternWarning();
+}
+
+function onRegexPatternChange() {
+    extension_settings.tts.regex_pattern = $('#tts_regex_pattern').val().toString();
+    saveSettingsDebounced();
+    updateRegexPatternWarning();
+}
+
+function updateRegexPatternWarning() {
+    const warning = $('#tts_regex_warning');
+    if (!extension_settings.tts.apply_regex) {
+        warning.hide();
+        return;
+    }
+
+    const pattern = extension_settings.tts.regex_pattern;
+    if (!pattern) {
+        warning.hide();
+        return;
+    }
+
+    const regex = regexFromString(pattern);
+    warning.toggle(!regex);
 }
 
 //##############//
@@ -978,7 +1244,7 @@ async function onPeriodicMessageGenerationTick() {
  * @param {boolean} unrestricted - If true, will include all characters in voiceMapEntries, even if they are not in the current chat.
  * @returns {string[]} - Array of character names
  */
-function getCharacters(unrestricted) {
+export function getCharacters(unrestricted) {
     const context = getContext();
 
     if (unrestricted) {
@@ -1005,10 +1271,28 @@ function getCharacters(unrestricted) {
             }
         }
     }
-    return characters.filter(onlyUnique);
+    characters = characters.filter(onlyUnique);
+
+    // If multi-voice is enabled, expand characters to include segment types
+    if (extension_settings.tts.multi_voice_enabled) {
+        const expandedCharacters = [];
+        for (const char of characters) {
+            if (char === DEFAULT_VOICE_MARKER || char === 'SillyTavern System') {
+                expandedCharacters.push(char);
+            } else {
+                expandedCharacters.push(`${char} ("Quotes")`);
+                expandedCharacters.push(`${char} (*Text inside asterisks*)`);
+                expandedCharacters.push(`${char} (Other text)`);
+            }
+        }
+        return expandedCharacters;
+    }
+
+    return characters;
+
 }
 
-function sanitizeId(input) {
+export function sanitizeId(input) {
     // Remove any non-alphanumeric characters except underscore (_) and hyphen (-)
     let sanitized = encodeURIComponent(input).replace(/[^a-zA-Z0-9-_]/g, '');
 
@@ -1217,6 +1501,9 @@ jQuery(async function () {
         $('#tts_periodic_auto_generation').on('click', onPeriodicAutoGenerationClick);
         $('#tts_narrate_by_paragraphs').on('click', onNarrateByParagraphsClick);
         $('#tts_narrate_user').on('click', onNarrateUserClick);
+        $('#tts_multi_voice_enabled').on('click', onMultiVoiceClick);
+        $('#tts_apply_regex').on('change', onApplyRegexChange);
+        $('#tts_regex_pattern').on('input', onRegexPatternChange);
 
         $('#playback_rate').on('input', function () {
             const value = $(this).val();

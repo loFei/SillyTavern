@@ -54,4 +54,6 @@ public/scripts/extensions/third-party
 .aider*
 .env
 /StartDev.bat
-
+yarn.lock
+*.code-workspace
+test-results/

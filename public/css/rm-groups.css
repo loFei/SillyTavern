@@ -6,6 +6,7 @@
     align-items: center;
 }
 
+#rm_group_chats_block .tag.filterByFolder,
 #rm_group_chats_block .tag.filterByGroups {
     display: none;
 }
@@ -209,6 +210,14 @@
 
 .group_select:hover {
     background-color: var(--white30a);
+}
+
+.group_select.avatar {
+    padding: 0;
+}
+
+.group_select.missing-avatar.inline_avatar {
+    justify-content: center;
 }
 
 .group_select .avatar {
