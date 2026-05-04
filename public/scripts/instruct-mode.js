@@ -597,7 +597,7 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
     function getSequence() {
         // User impersonation prompt
         if (isImpersonate) {
-            return instruct.input_sequence;
+            return instruct.last_input_sequence || instruct.input_sequence;
         }
 
         // Neutral / system / quiet prompt
@@ -798,7 +798,6 @@ jQuery(() => {
             $('#instruct_system_sequence').prop('readOnly', false);
             $('#instruct_system_suffix').prop('readOnly', false);
         }
-
     });
 
     $('#instruct_enabled').on('change', function () {

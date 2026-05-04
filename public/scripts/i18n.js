@@ -139,7 +139,8 @@ async function getLocaleData(language) {
 function findLang(language) {
     const supportedLang = langs.find(x => x.lang === language);
 
-    if (!supportedLang && language !== 'en') {
+    const isEn = language.startsWith('en'); // includes 'en', and more specific locales like 'en-us', 'en-au', etc
+    if (!supportedLang && !isEn) {
         console.warn(`Unsupported language: ${language}`);
     }
     return supportedLang;
@@ -237,6 +238,11 @@ async function getMissingTranslations() {
     toastr.success(`Found ${uniqueMissingData.length} missing translations. See browser console for details.`);
 }
 
+/**
+ * Applies localization to a given root element or HTML string.
+ * @param {Document|string} root The root element or HTML string to apply localization to
+ * @returns {Document|string} Translated root, in the same format as the input (Document or HTML string)
+ */
 export function applyLocale(root = document) {
     if (!localeData || Object.keys(localeData).length === 0) {
         return root;

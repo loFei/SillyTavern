@@ -263,13 +263,9 @@ class GptSovitsV2Provider {
     //#################//
 
     async getVoice(voiceName) {
-
-
-
         if (this.voices.length == 0) {
             this.voices = await this.fetchTtsVoiceObjects();
         }
-
 
 
         const match = this.voices.filter(
@@ -281,7 +277,6 @@ class GptSovitsV2Provider {
         }
         return match;
     }
-
 
 
     async generateTts(text, voiceId) {
@@ -419,8 +414,6 @@ class GptSovitsV2Provider {
      */
 
 
-
-
     async fetchTtsGeneration(inputText, voiceId, lang = null, forceNoStreaming = false) {
         console.info(`Generating new TTS for voice_id ${voiceId}`);
 
@@ -466,7 +459,6 @@ class GptSovitsV2Provider {
         }
         return response;
     }
-
 
 
     // Interface not used
